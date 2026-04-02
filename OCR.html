@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AI 專業作文導師 (手寫/修辭/結構優化版)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src='https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js'></script>
+  <style>
+    body { background: #f4f7f9; font-family: "Microsoft JhengHei", sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+    .main-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px; flex: 1; overflow: hidden; }
+    .card-panel { background: white; border-radius: 15px; box-shadow: 0 8px 24px rgba(0,0,0,0.05); display: flex; flex-direction: column; padding: 25px; border: 1px solid #e0e6ed; }
+    
+    /* 編輯區優化 */
+    .essay-box { flex: 1; font-size: 1.1rem; line-height: 1.8; border: 1px solid #dee2e6; padding: 20px; border-radius: 10px; resize: none; background: #fff; }
+    .essay-box:focus { border-color: #0d6efd; box-shadow: 0 0 0 0.25rem rgba(13,110,253,.1); outline: none; }
+    
+    /* 結果區優化 */
+    .result-container { flex: 1; overflow-y: auto; background: #fdfdfd; border-radius: 10px; padding: 20px; border: 1px solid #eee; }
+    .report-section { margin-bottom: 20px; border-bottom: 1px solid #f0f0f0; padding-bottom: 15px; }
+    .report-title { color: #0d6efd; font-weight: bold; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+    
+    .status-tag { font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; background: #e9ecef; color: #495057; }
+    #preview-img { max-height: 200px; object-fit: contain; border-radius: 8px; margin-bottom: 10px; border: 1px solid #ddd; }
+    
+    .loading-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); display: none; align-items: center; justify-content: center; z-index: 100; border-radius: 15px; }
+  </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark bg-dark px-4">
+  <span class="navbar-brand fw-bold"><i class="fas fa-pen-nib me-2"></i>AI 專業作文導師</span>
+  <div class="d-flex align-items-center gap-3">
+    <span class="text-white-50 small">Gemini API Key:</span>
+    <input type="password" id="api_key" class="form-control form-control-sm" style="width: 200px;" placeholder="貼上你的 API Key">
+  </div>
+</nav>
+
+<div class="main-grid">
+  <div class="card-panel position-relative">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="fw-bold m-0 text-primary">學生原文</h5>
+      <span id="ocr-status" class="status-tag">等待圖片...</span>
+    </div>
+
+    <img id="preview-img" src="" style="display:none;">
+    
+    <div class="d-flex gap-2 mb-3">
+      <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleImage(event)">
+      <button class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('file-input').click()">📷 上傳手寫稿</button>
+      <button class="btn btn-primary btn-sm" id="ocr-btn" disabled onclick="runOCR()">🔍 辨識文字</button>
+    </div>
+
+    <textarea id="essay-content" class="essay-box" placeholder="辨識結果會顯示在這裡，你也可以直接輸入文字..."></textarea>
+    
+    <div id="ocr-loader" class="loading-overlay">
+      <div class="text-center">
+        <div class="spinner-grow text-primary"></div>
+        <p class="mt-2 fw-bold" id="ocr-progress">辨識中...</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-panel position-relative">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="fw-bold m-0 text-success">批改與深度評語</h5>
+      <button class="btn btn-success fw-bold px-4" onclick="analyzeEssay()">🚀 開始分析</button>
+    </div>
+
+    <div class="result-container" id="ai-result">
+      <p class="text-muted">等待分析... 系統將針對錯別字、修辭、結構進行深度批改。</p>
+    </div>
+
+    <div id="ai-loader" class="loading-overlay">
+      <div class="text-center">
+        <div class="spinner-border text-success"></div>
+        <p class="mt-2 fw-bold text-success">AI 老師批閱中...</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let selectedFile = null;
+
+  function handleImage(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    selectedFile = file;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = document.getElementById('preview-img');
+      img.src = ev.target.result;
+      img.style.display = 'block';
+      document.getElementById('ocr-btn').disabled = false;
+      document.getElementById('ocr-status').innerText = "圖片已加載";
+    }
+    reader.readAsDataURL(file);
+  }
+
+  async function runOCR() {
+    const status = document.getElementById('ocr-status');
+    const loader = document.getElementById('ocr-loader');
+    const progressText = document.getElementById('ocr-progress');
+    loader.style.display = 'flex';
+
+    try {
+      const result = await Tesseract.recognize(selectedFile, 'chi_tra', {
+        logger: m => { if(m.status === 'recognizing') progressText.innerText = `辨識中: ${(m.progress*100).toFixed(0)}%`; }
+      });
+      // 自動清理 OCR 出現的奇怪空格 (手寫辨識常見問題)
+      let cleanedText = result.data.text.replace(/\s+/g, '');
+      document.getElementById('essay-content').value = cleanedText;
+      status.innerText = "辨識完成";
+    } catch (err) {
+      alert("辨識失敗，請確認圖片清晰度。");
+    } finally {
+      loader.style.display = 'none';
+    }
+  }
+
+  async function analyzeEssay() {
+    const essay = document.getElementById('essay-content').value;
+    const apiKey = document.getElementById('api_key').value;
+    const resultDiv = document.getElementById('ai-result');
+    const loader = document.getElementById('ai-loader');
+
+    if (!essay) return alert("內容不能為空");
+    if (!apiKey) return alert("請輸入 API Key");
+
+    loader.style.display = 'flex';
+
+    // 這裡是優化後的進階 Prompt
+    const prompt = `你是一位資深的中文科主任，請針對以下作文進行「手寫識別修正」及「深度批改」。
+    請分以下章節回覆，並使用 HTML 格式：
+
+    1. **原文校對與潤色**：(先修正手寫 OCR 可能產生的錯別字，並標示出原文與修正後對比)
+    2. **修辭分析**：(分析學生使用了哪些修辭手法，如比喻、擬人、排比等，並評價其運用效果)
+    3. **結構評估**：(分析文章的起承轉合、首尾呼應，結構是否嚴謹)
+    4. **語句優化**：(挑選 1-2 個可以寫得更好的句子，給予改進範例)
+    5. **綜合評語與等級**：(總結優缺點，並給予等級 A-F)
+
+    學生作文內容：
+    ---
+    ${essay}
+    ---`;
+
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+
+      const data = await response.json();
+      let aiText = data.candidates[0].content.parts[0].text;
+      
+      // 處理 AI 返回的 Markdown 並美化展示
+      resultDiv.innerHTML = formatAIResponse(aiText);
+    } catch (err) {
+      resultDiv.innerHTML = `<div class="alert alert-danger">錯誤：${err.message}</div>`;
+    } finally {
+      loader.style.display = 'none';
+    }
+  }
+
+  function formatAIResponse(text) {
+    // 簡單將 **標題** 轉為彩色標題，將換行轉為 <br>
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '<div class="report-title">📌 $1</div>')
+      .replace(/\n/g, '<br>');
+  }
+</script>
+
+</body>
+</html>
